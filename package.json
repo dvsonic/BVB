@@ -1,0 +1,11 @@
+{
+  "name": "BVB",
+  "uuid": "80bbd707-a1fa-46d1-a4fb-b976d8a14bf7",
+  "creator": {
+    "version": "3.8.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "ws": "^8.14.2"
+  }
+}

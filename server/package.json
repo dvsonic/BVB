@@ -1,0 +1,25 @@
+{
+  "name": "bvb-frame-sync-server",
+  "version": "1.0.0",
+  "description": "基于帧同步的WebSocket服务器",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "package.json": "^2.0.1",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": [
+    "websocket",
+    "frame-sync",
+    "game-server",
+    "cocos"
+  ],
+  "author": "",
+  "license": "MIT"
+}
