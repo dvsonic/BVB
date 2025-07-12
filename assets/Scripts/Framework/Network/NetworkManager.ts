@@ -12,7 +12,8 @@ export enum MessageType {
     GAME_STATE = 'gameState',
     ROOM_INFO = 'roomInfo',
     PLAYER_READY = 'playerReady',
-    GAME_START = 'gameStart'
+    GAME_START = 'gameStart',
+    FIND_OR_CREATE_ROOM = 'findOrCreateRoom' // 新增消息类型
 }
 
 /**
@@ -180,13 +181,23 @@ export class NetworkManager extends Component {
     }
 
     /**
+     * 查找或创建房间
+     */
+    public findAndJoinRoom(): void {
+        this.sendMessage({
+            type: MessageType.FIND_OR_CREATE_ROOM,
+            data: { playerId: this._playerId }
+        });
+    }
+
+    /**
      * 发送输入数据
      */
-    public sendInput(frameId: number, input: any): void {
+    public sendInput(input: any): void {
         this.sendMessage({
             type: MessageType.PLAYER_INPUT,
             data: {
-                frameId: frameId,
+                // 不再需要 frameId
                 input: input
             }
         });

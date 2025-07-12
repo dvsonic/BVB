@@ -78,15 +78,33 @@ class FrameSyncServer {
                 case 'playerInput':
                     this.handlePlayerInput(clientId, message.data);
                     break;
-                case 'playerReady':
-                    this.handlePlayerReady(clientId, message.data);
+                case 'findOrCreateRoom':
+                    this.handleFindOrCreateRoom(clientId, message.data);
                     break;
-                // case 'gameStart':
-                //     this.handleGameStart(clientId, message.data);
-                //     break;
+                case 'gameStart':
+                    this.handleGameStart(clientId, message.data);
+                    break;
             }
         } catch (error) {
             console.error('处理消息错误:', error);
+        }
+    }
+
+    handleFindOrCreateRoom(clientId, data) {
+        let joined = false;
+        // 查找一个正在等待且未满的房间 (假设最大玩家数为2)
+        for (const [roomId, room] of this.rooms) {
+            if (room.gameState === 'waiting' && room.players.size < 2) {
+                this.handleJoinRoom(clientId, { roomId, playerId: data.playerId });
+                joined = true;
+                break;
+            }
+        }
+
+        // 如果没有找到合适的房间，则创建一个新房间
+        if (!joined) {
+            const newRoomId = 'room_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+            this.handleJoinRoom(clientId, { roomId: newRoomId, playerId: data.playerId });
         }
     }
 
@@ -105,17 +123,22 @@ class FrameSyncServer {
                 players: new Map(),
                 gameState: 'waiting',
                 currentFrame: 0,
-                inputBuffer: new Map()
+                inputBuffer: new Map(),
+                ownerId: null // 新增房主ID
             });
         }
         
         const room = this.rooms.get(roomId);
+
+        // 如果是第一个加入的玩家，则设为房主
+        if (room.players.size === 0) {
+            room.ownerId = playerId;
+        }
         
         // 添加玩家到房间
         room.players.set(playerId, {
             playerId: playerId,
             clientId: clientId,
-            isReady: false,
             position: { x: 0, y: 0 },
             velocity: { x: 0, y: 0 }
         });
@@ -129,9 +152,9 @@ class FrameSyncServer {
             type: 'roomInfo',
             data: {
                 roomId: roomId,
+                ownerId: room.ownerId, // 在房间信息中包含房主ID
                 players: Array.from(room.players.values()).map(p => ({
-                    playerId: p.playerId,
-                    isReady: p.isReady
+                    playerId: p.playerId
                 }))
             }
         });
@@ -139,10 +162,14 @@ class FrameSyncServer {
         // 通知房间内其他玩家
         this.broadcastToRoom(roomId, {
             type: 'playerJoined',
-            data: { playerId: playerId }
+            data: { 
+                playerId: playerId,
+                ownerId: room.ownerId // 新玩家加入时，也广播最新的房主信息
+            }
         }, clientId);
         
-        console.log(`玩家 ${playerId} 加入房间 ${roomId}`);
+        console.log(`玩家 ${playerId} 加入房间 ${roomId}, 房主是 ${room.ownerId}`);
+        this.broadcastRoomState(roomId);
     }
 
     handleLeaveRoom(clientId, data) {
@@ -152,20 +179,23 @@ class FrameSyncServer {
             return;
         }
         
-        const room = this.rooms.get(client.roomId);
+        const roomId = client.roomId;
+        const room = this.rooms.get(roomId);
         if (room) {
-            room.players.delete(client.playerId);
-            
-            // 通知房间内其他玩家
-            this.broadcastToRoom(client.roomId, {
-                type: 'playerLeft',
-                data: { playerId: client.playerId }
-            }, clientId);
+            const leavingPlayerId = client.playerId;
+            room.players.delete(leavingPlayerId);
             
             // 如果房间为空，删除房间
             if (room.players.size === 0) {
                 this.rooms.delete(client.roomId);
                 this.stopGameLoop(client.roomId);
+            } else {
+                // 如果离开的是房主，则重新选举一个
+                if (room.ownerId === leavingPlayerId) {
+                    room.ownerId = room.players.keys().next().value;
+                }
+                // 向所有剩余玩家广播最新的房间状态
+                this.broadcastRoomState(roomId);
             }
         }
         
@@ -181,47 +211,34 @@ class FrameSyncServer {
         }
         
         const room = this.rooms.get(client.roomId);
-        if (!room) {
+        if (!room || room.gameState !== 'playing') {
             return;
         }
         
-        const { frameId, input } = data;
+        // 服务器决定输入的生效帧
+        // 接收到的输入，将在服务器当前帧的基础上，加上缓冲帧数后生效
+        const bufferFrames = 1; // 改为0以实现本地最低延迟 (原为3或1)
+        const targetFrame = room.currentFrame + bufferFrames;
+        const { input } = data;
         
-        // 将输入添加到缓冲区
-        if (!room.inputBuffer.has(frameId)) {
-            room.inputBuffer.set(frameId, []);
+        // 确保该帧的输入数组存在
+        if (!room.inputBuffer.has(targetFrame)) {
+            room.inputBuffer.set(targetFrame, []);
         }
         
-        room.inputBuffer.get(frameId).push(input);
-    }
-
-    handlePlayerReady(clientId, data) {
-        const client = this.clients.get(clientId);
+        const frameInputs = room.inputBuffer.get(targetFrame);
         
-        if (!client || !client.roomId) {
-            return;
-        }
+        // 查找该玩家在这一帧是否已经有输入
+        const playerInputIndex = frameInputs.findIndex(
+            (existingInput) => existingInput.playerId === input.playerId
+        );
         
-        const room = this.rooms.get(client.roomId);
-        if (!room) {
-            return;
-        }
-        
-        const player = room.players.get(client.playerId);
-        if (player) {
-            player.isReady = data.isReady;
-            
-            // 通知房间内所有玩家
-            this.broadcastToRoom(client.roomId, {
-                type: 'playerReady',
-                data: {
-                    playerId: client.playerId,
-                    isReady: data.isReady
-                }
-            });
-            
-            // 检查是否所有玩家都准备好了
-            this.checkAllPlayersReady(client.roomId);
+        if (playerInputIndex > -1) {
+            // 如果有，用新的输入覆盖旧的输入
+            frameInputs[playerInputIndex] = input;
+        } else {
+            // 如果没有，直接添加新输入
+            frameInputs.push(input);
         }
     }
 
@@ -231,27 +248,19 @@ class FrameSyncServer {
         if (!client || !client.roomId) {
             return;
         }
-        
-        this.startGame(client.roomId);
-    }
 
-    checkAllPlayersReady(roomId) {
-        const room = this.rooms.get(roomId);
-        
-        if (!room || room.players.size < 1) {
+        const room = this.rooms.get(client.roomId);
+        if (!room) {
+            return;
+        }
+
+        // 验证发起者是否为房主
+        if (client.playerId !== room.ownerId) {
+            console.log(`玩家 ${client.playerId} 尝试开始游戏但不是房主。`);
             return;
         }
         
-        let allReady = true;
-        room.players.forEach(player => {
-            if (!player.isReady) {
-                allReady = false;
-            }
-        });
-        
-        if (allReady) {
-            this.startGame(roomId);
-        }
+        this.startGame(client.roomId);
     }
 
     startGame(roomId) {
@@ -276,7 +285,7 @@ class FrameSyncServer {
         // 延迟启动游戏循环，给客户端时间同步
         setTimeout(() => {
             this.startGameLoop(roomId);
-        }, 1000); // 延迟1秒
+        }, 100); // 延迟100毫秒 (原为1000)
         
         console.log(`房间 ${roomId} 游戏开始`);
     }
@@ -328,6 +337,24 @@ class FrameSyncServer {
         room.inputBuffer.delete(room.currentFrame - 10);
         
         room.currentFrame++;
+    }
+
+    broadcastRoomState(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return;
+
+        const roomState = {
+            roomId: room.id,
+            ownerId: room.ownerId,
+            players: Array.from(room.players.values()).map(p => ({
+                playerId: p.playerId
+            }))
+        };
+
+        this.broadcastToRoom(roomId, {
+            type: 'roomInfo',
+            data: roomState
+        });
     }
 
     handleDisconnect(clientId) {

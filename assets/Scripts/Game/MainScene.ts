@@ -1,6 +1,6 @@
 import { _decorator, Component, Node, Button, Label, Canvas, UITransform, Color, director, Prefab, instantiate } from 'cc';
 import { GameManager, GameState } from './GameManager';
-import { NetworkManager } from '../Framework/Network/NetworkManager';
+import { NetworkManager, MessageType } from '../Framework/Network/NetworkManager';
 import { FrameSyncManager } from '../Framework/FrameSync/FrameSyncManager';
 import { InputManager } from '../Framework/FrameSync/InputManager';
 const { ccclass, property } = _decorator;
@@ -14,10 +14,10 @@ export class MainScene extends Component {
     public uiContainer: Node = null;
     
     @property(Button)
-    public startButton: Button = null;
+    public createOrJoin: Button = null;
     
     @property(Button)
-    public readyButton: Button = null;
+    public startButton: Button = null;
     
     @property(Button)
     public pauseButton: Button = null;
@@ -82,7 +82,7 @@ export class MainScene extends Component {
         // 创建开始按钮
         this.createStartButton();
         
-        // 创建准备按钮
+        // 创建准备按钮 (现在是开始按钮)
         this.createReadyButton();
         
         // 创建暂停按钮
@@ -99,15 +99,13 @@ export class MainScene extends Component {
         
         // 创建游戏区域
         this.createGameArea();
-
-        GameManager.instance.init();
         
         this._isUISetup = true;
     }
 
-    private createStartButton(): void {
-        if (!this.startButton) {
-            const buttonNode = new Node('StartButton');
+    private createStartButton(): void { // 这个现在是 createOrJoin 按钮
+        if (!this.createOrJoin) {
+            const buttonNode = new Node('CreateOrJoinButton');
             this.uiContainer.addChild(buttonNode);
             
             const button = buttonNode.addComponent(Button);
@@ -116,15 +114,14 @@ export class MainScene extends Component {
             uiTransform.setContentSize(120, 40);
             buttonNode.setPosition(0, 200, 0);
             
-            this.startButton = button;
+            this.createOrJoin = button;
         }
-        
-        this.startButton.node.on(Button.EventType.CLICK, this.onStartButtonClick, this);
+        this.createOrJoin.node.on(Button.EventType.CLICK, this.onCreateOrJoinClick, this);
     }
 
-    private createReadyButton(): void {
-        if (!this.readyButton) {
-            const buttonNode = new Node('ReadyButton');
+    private createReadyButton(): void { // 这个现在是 startButton 按钮
+        if (!this.startButton) {
+            const buttonNode = new Node('StartButton');
             this.uiContainer.addChild(buttonNode);
             
             const button = buttonNode.addComponent(Button);
@@ -133,11 +130,10 @@ export class MainScene extends Component {
             uiTransform.setContentSize(120, 40);
             buttonNode.setPosition(0, 150, 0);
             
-            this.readyButton = button;
+            this.startButton = button;
         }
-        
-        this.readyButton.node.on(Button.EventType.CLICK, this.onReadyButtonClick, this);
-        this.readyButton.node.active = false; // 默认隐藏
+        this.startButton.node.on(Button.EventType.CLICK, this.onStartButtonClick, this);
+        this.startButton.node.active = false; // 默认隐藏
     }
 
     private createPauseButton(): void {
@@ -255,9 +251,6 @@ export class MainScene extends Component {
             case GameState.WAITING:
                 statusText = '等待玩家加入...';
                 break;
-            case GameState.READY:
-                statusText = '准备开始游戏...';
-                break;
             case GameState.PLAYING:
                 statusText = '游戏进行中';
                 break;
@@ -287,57 +280,69 @@ export class MainScene extends Component {
     }
 
     private updateButtonStates(): void {
+        if (!this._gameManager || !this._isUISetup) {
+            return;
+        }
+
+        const myPlayerId = this._networkManager.playerId;
+        const isInRoom = this._gameManager.roomId !== '';
+        const isOwner = myPlayerId === this._gameManager.ownerId && isInRoom;
         const gameState = this._gameManager.gameState;
+
+        // "创建/加入房间" 按钮的逻辑
+        // 游戏处于等待状态，且玩家还未加入任何房间时显示
+        this.createOrJoin.node.active = gameState === GameState.WAITING && !isInRoom;
+
+        // "开始游戏" 按钮的逻辑 (原为 readyButton)
+        // 只有房主能看到，并且游戏处于等待状态
+        this.startButton.node.active = isOwner && gameState === GameState.WAITING;
         
-        // 开始按钮
-        if (this.startButton) {
-            this.startButton.node.active = (gameState === GameState.WAITING);
-        }
-        
-        // 准备按钮
-        if (this.readyButton) {
-            this.readyButton.node.active = (gameState === GameState.WAITING && this._networkManager.isConnected);
-        }
-        
-        // 暂停按钮
-        if (this.pauseButton) {
-            this.pauseButton.node.active = (gameState === GameState.PLAYING || gameState === GameState.PAUSED);
-            
-            // 更新按钮文本
-            const buttonLabel = this.pauseButton.node.getComponentInChildren(Label);
-            if (buttonLabel) {
-                buttonLabel.string = gameState === GameState.PLAYING ? '暂停' : '继续';
-            }
+        // "暂停" 按钮的逻辑
+        // 游戏进行中时显示
+        this.pauseButton.node.active = gameState === GameState.PLAYING;
+    }
+
+    private onCreateOrJoinClick(): void {
+        console.log('创建/加入房间按钮点击');
+        if (!this._networkManager.isConnected) {
+            this._networkManager.connect()
+                .then(() => {
+                    this._networkManager.findAndJoinRoom();
+                })
+                .catch(err => {
+                    console.error('连接服务器失败:', err);
+                });
+        } else {
+            this._networkManager.findAndJoinRoom();
         }
     }
 
     private onStartButtonClick(): void {
-        console.log('开始游戏按钮点击');
-        this._gameManager.startGame();
-    }
-
-    private onReadyButtonClick(): void {
-        console.log('准备按钮点击');
-        this._gameManager.playerReady();
+        console.log('房主点击了开始按钮');
+        // 由于按钮的显示/隐藏逻辑已经确保了点击者是房主，
+        // 这里可以直接发送开始游戏的指令。
+        this._networkManager.sendMessage({
+            type: MessageType.GAME_START,
+            data: {}
+        });
     }
 
     private onPauseButtonClick(): void {
-        console.log('暂停按钮点击');
-        
-        if (this._gameManager.gameState === GameState.PLAYING) {
+        const gameState = this._gameManager.gameState;
+        if (gameState === GameState.PLAYING) {
             this._gameManager.pauseGame();
-        } else if (this._gameManager.gameState === GameState.PAUSED) {
+        } else if (gameState === GameState.PAUSED) {
             this._gameManager.resumeGame();
         }
     }
 
     onDestroy() {
         // 清理事件监听
+        if (this.createOrJoin) {
+            this.createOrJoin.node.off(Button.EventType.CLICK, this.onCreateOrJoinClick, this);
+        }
         if (this.startButton) {
             this.startButton.node.off(Button.EventType.CLICK, this.onStartButtonClick, this);
-        }
-        if (this.readyButton) {
-            this.readyButton.node.off(Button.EventType.CLICK, this.onReadyButtonClick, this);
         }
         if (this.pauseButton) {
             this.pauseButton.node.off(Button.EventType.CLICK, this.onPauseButtonClick, this);

@@ -1,5 +1,6 @@
 import { _decorator, Component, Node, director } from 'cc';
 import { NetworkManager, MessageType, NetworkMessage } from '../Network/NetworkManager';
+import { Logger } from '../Logger';
 const { ccclass, property } = _decorator;
 
 /**
@@ -44,12 +45,13 @@ export class FrameSyncManager extends Component {
     private bufferFrames: number = 3; // 缓冲帧数
     
     @property
-    private jitterBufferFrames: number = 2; // 抖动缓冲帧数
+    private jitterBufferFrames: number = 1; // 抖动缓冲帧数
     
     private _isRunning: boolean = false;
     private _currentFrame: number = 0;
     private _frameBuffer: Map<number, FrameData> = new Map();
-    private _inputBuffer: Map<number, PlayerInput[]> = new Map();
+    // 客户端不再需要输入缓冲区
+    // private _inputBuffer: Map<number, PlayerInput[]> = new Map(); 
     private _networkManager: NetworkManager = null;
     private _frameInterval: number = 0;
     private _lastFrameTime: number = 0;
@@ -173,16 +175,8 @@ export class FrameSyncManager extends Component {
      * 添加输入到缓冲区
      */
     public addInput(input: PlayerInput): void {
-        const targetFrame = this._currentFrame + this.bufferFrames;
-        
-        if (!this._inputBuffer.has(targetFrame)) {
-            this._inputBuffer.set(targetFrame, []);
-        }
-        
-        this._inputBuffer.get(targetFrame).push(input);
-        
-        // 发送输入到服务器
-        this._networkManager.sendInput(targetFrame, input);
+        // 客户端不再管理输入缓冲或目标帧，直接将输入发送到服务器
+        this._networkManager.sendInput(input);
     }
 
     /**
@@ -259,11 +253,11 @@ export class FrameSyncManager extends Component {
             }
         }
         
-        for (const [frameId] of this._inputBuffer) {
-            if (frameId < minFrame) {
-                this._inputBuffer.delete(frameId);
-            }
-        }
+        // for (const [frameId] of this._inputBuffer) {
+        //     if (frameId < minFrame) {
+        //         this._inputBuffer.delete(frameId);
+        //     }
+        // }
     }
 
     /**

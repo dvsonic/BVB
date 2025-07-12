@@ -9,7 +9,6 @@ import { Ball } from './Ball';
  */
 export enum GameState {
     WAITING = 'waiting',
-    READY = 'ready',
     PLAYING = 'playing',
     PAUSED = 'paused',
     FINISHED = 'finished'
@@ -22,7 +21,6 @@ export interface PlayerInfo {
     playerId: string;
     nickname: string;
     color: Color;
-    isReady: boolean;
     ballNode?: Node;
 }
 
@@ -35,8 +33,8 @@ export class GameManager {
     public ballPrefab: Prefab = null;
     public gameArea: Node = null;
     public maxPlayers: number = 4;
-    public gameAreaWidth: number = 800;
-    public gameAreaHeight: number = 600;
+    public gameAreaWidth: number = 720;
+    public gameAreaHeight: number = 1280;
     
     private _networkManager: NetworkManager = null;
     private _frameSyncManager: FrameSyncManager = null;
@@ -46,11 +44,11 @@ export class GameManager {
     private _balls: Map<string, Ball> = new Map();
     private _myPlayerId: string = '';
     private _roomId: string = '';
+    private _ownerId: string = ''; // 新增房主ID
     private _gameStartTime: number = 0;
 
     // 用于修复内存泄漏的绑定函数
     private _boundOnRoomInfo: (message: any) => void;
-    private _boundOnPlayerReady: (message: any) => void;
     private _boundOnGameStart: (message: any) => void;
     private _boundOnFrameUpdate: (frameData: FrameData, fixedDeltaTime: number) => void;
 
@@ -79,13 +77,11 @@ export class GameManager {
         
         // 绑定函数引用
         this._boundOnRoomInfo = this.onRoomInfo.bind(this);
-        this._boundOnPlayerReady = this.onPlayerReady.bind(this);
         this._boundOnGameStart = this.onGameStart.bind(this);
         this._boundOnFrameUpdate = this.onFrameUpdate.bind(this);
 
         // 注册网络消息处理器
         this._networkManager.registerMessageHandler(MessageType.ROOM_INFO, this._boundOnRoomInfo);
-        this._networkManager.registerMessageHandler(MessageType.PLAYER_READY, this._boundOnPlayerReady);
         this._networkManager.registerMessageHandler(MessageType.GAME_START, this._boundOnGameStart);
         
         // 注册帧同步回调
@@ -93,9 +89,6 @@ export class GameManager {
         
         // 获取我的玩家ID
         this._myPlayerId = this._networkManager.playerId;
-        
-        // 设置游戏区域
-        this.setupGameArea();
     }
 
     /**
@@ -105,7 +98,6 @@ export class GameManager {
         // 取消注册
         if (this._networkManager) {
             this._networkManager.unregisterMessageHandler(MessageType.ROOM_INFO, this._boundOnRoomInfo);
-            this._networkManager.unregisterMessageHandler(MessageType.PLAYER_READY, this._boundOnPlayerReady);
             this._networkManager.unregisterMessageHandler(MessageType.GAME_START, this._boundOnGameStart);
         }
         
@@ -123,6 +115,7 @@ export class GameManager {
         this._balls.clear();
         this._myPlayerId = '';
         this._roomId = '';
+        this._ownerId = ''; // 重置房主ID
         this._gameStartTime = 0;
         
         // 清理所有小球节点
@@ -135,19 +128,10 @@ export class GameManager {
     }
 
     /**
-     * 设置游戏区域
+     * 获取房间ID
      */
-    private setupGameArea(): void {
-        if (!this.gameArea) {
-            console.warn('游戏区域未设置，请先调用setGameArea方法');
-            return;
-        }
-        
-        // 设置游戏区域大小
-        const uiTransform = this.gameArea.getComponent(UITransform);
-        if (uiTransform) {
-            uiTransform.setContentSize(this.gameAreaWidth, this.gameAreaHeight);
-        }
+    public get roomId(): string {
+        return this._roomId;
     }
 
     /**
@@ -155,6 +139,8 @@ export class GameManager {
      */
     public setGameArea(gameArea: Node): void {
         this.gameArea = gameArea;
+        this.gameAreaWidth = this.gameArea.getComponent(UITransform).width;
+        this.gameAreaHeight = this.gameArea.getComponent(UITransform).height;
     }
 
     /**
@@ -209,19 +195,21 @@ export class GameManager {
     }
 
     /**
-     * 玩家准备
+     * 房主请求开始游戏
      */
-    public playerReady(): void {
+    public requestGameStart(): void {
+        if (this._myPlayerId !== this._ownerId) {
+            console.warn('只有房主才能开始游戏');
+            return;
+        }
         if (this._gameState !== GameState.WAITING) {
+            console.warn('游戏已经开始或不处于等待状态');
             return;
         }
         
         this._networkManager.sendMessage({
-            type: MessageType.PLAYER_READY,
-            data: {
-                playerId: this._myPlayerId,
-                isReady: true
-            }
+            type: MessageType.GAME_START,
+            data: {}
         });
     }
 
@@ -230,35 +218,43 @@ export class GameManager {
      */
     private onRoomInfo(message: any): void {
         const roomData = message.data;
+        this._roomId = roomData.roomId;
+        this._ownerId = roomData.ownerId;
         
-        // 更新玩家列表
+        const serverPlayers = new Map<string, any>();
         if (roomData.players) {
             roomData.players.forEach((playerData: any) => {
-                this.addPlayer(playerData);
+                serverPlayers.set(playerData.playerId, playerData);
             });
         }
-    }
-
-    /**
-     * 处理玩家准备
-     */
-    private onPlayerReady(message: any): void {
-        const playerData = message.data;
-        
-        // 更新玩家状态
-        const player = this._players.get(playerData.playerId);
-        if (player) {
-            player.isReady = playerData.isReady;
-        }
-        
-        // 检查是否所有玩家都准备好了
-        this.checkAllPlayersReady();
+    
+        // 移除已离开的玩家
+        this._players.forEach((playerInfo, playerId) => {
+            if (!serverPlayers.has(playerId)) {
+                if (playerInfo.ballNode) {
+                    playerInfo.ballNode.destroy();
+                }
+                this._players.delete(playerId);
+                this._balls.delete(playerId);
+            }
+        });
+    
+        // 添加新玩家
+        serverPlayers.forEach((playerData, playerId) => {
+            if (!this._players.has(playerId)) {
+                this.addPlayer(playerData);
+            }
+        });
     }
 
     /**
      * 处理游戏开始
      */
     private onGameStart(message: any): void {
+        if (this._gameState === GameState.PLAYING) {
+            console.warn('游戏已开始，忽略重复的开始指令。');
+            return;
+        }
         this._gameState = GameState.PLAYING;
         this._gameStartTime = Date.now();
         
@@ -307,8 +303,7 @@ export class GameManager {
         const playerInfo: PlayerInfo = {
             playerId: playerId,
             nickname: playerData.nickname || `Player${this._players.size + 1}`,
-            color: this.getPlayerColor(this._players.size),
-            isReady: playerData.isReady || false
+            color: this.getPlayerColor(this._players.size)
         };
         
         this._players.set(playerId, playerInfo);
@@ -330,34 +325,6 @@ export class GameManager {
     }
 
     /**
-     * 检查所有玩家是否准备好
-     */
-    private checkAllPlayersReady(): void {
-        if (this._players.size < 1) {
-            return; // 至少需要1个玩家
-        }
-        
-        let allReady = true;
-        this._players.forEach(player => {
-            if (!player.isReady) {
-                allReady = false;
-            }
-        });
-        
-        if (allReady) {
-            this._gameState = GameState.READY;
-            
-            // 发送游戏开始消息
-            this._networkManager.sendMessage({
-                type: MessageType.GAME_START,
-                data: {
-                    timestamp: Date.now()
-                }
-            });
-        }
-    }
-
-    /**
      * 创建玩家小球
      */
     private createPlayerBalls(): void {
@@ -365,6 +332,7 @@ export class GameManager {
             console.error('小球预制体未设置');
             return;
         }
+        console.log('createPlayerBalls', this._players);
         
         let index = 0;
         this._players.forEach(player => {
@@ -441,6 +409,13 @@ export class GameManager {
     }
 
     /**
+     * 获取房主ID
+     */
+    public get ownerId(): string {
+        return this._ownerId;
+    }
+
+    /**
      * 暂停游戏
      */
     public pauseGame(): void {
@@ -495,11 +470,5 @@ export class GameManager {
         console.log('游戏状态:', this._gameState);
         console.log('帧同步运行:', this._frameSyncManager?.isRunning);
         console.log('网络连接:', this._networkManager?.isConnected);
-        
-        // 模拟输入测试
-        if (this._inputManager) {
-            const testDirection = new Vec2(1, 0);
-            this._inputManager.forceInput(testDirection);
-        }
     }
 }

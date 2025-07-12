@@ -147,15 +147,6 @@ export class InputManager extends Component {
     }
 
     /**
-     * 强制发送输入
-     */
-    public forceInput(direction: Vec2): void {
-        this._currentInput = direction;
-        this.sendMoveInput(direction);
-        this._lastInputTime = Date.now();
-    }
-
-    /**
      * 获取当前输入
      */
     public getCurrentInput(): Vec2 {

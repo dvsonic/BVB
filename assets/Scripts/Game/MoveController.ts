@@ -32,6 +32,13 @@ export class MoveController extends Component {
         this.node.on(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
         this.node.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         this.node.on(Input.EventType.TOUCH_CANCEL, this.onTouchEnd, this);
+        // 移除了在 this.anchor 上的重复监听。
+        // 因为 anchor 是 node 的子节点，所有在 anchor 上的触摸事件
+        // 都会冒泡到 node 上，所以只需要在 node 上监听一次即可。
+        // this.anchor.on(Input.EventType.TOUCH_START, this.onTouchStart, this);
+        // this.anchor.on(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
+        // this.anchor.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
+        // this.anchor.on(Input.EventType.TOUCH_CANCEL, this.onTouchEnd, this);
 
         if (this.anchor) {
             this.anchor.setPosition(Vec3.ZERO);
@@ -45,6 +52,7 @@ export class MoveController extends Component {
         this.node.off(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
         this.node.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         this.node.off(Input.EventType.TOUCH_CANCEL, this.onTouchEnd, this);
+        // 由于我们移除了 anchor 上的监听，这里也无需再添加 off
         if (this._inputManager) {
             if (this._isTouching) {
                 this._inputManager.stopController();
