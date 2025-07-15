@@ -126,6 +126,7 @@ export class FrameSyncManager extends Component {
      * 帧更新
      */
     private frameUpdate(): void {
+        Logger.debug('FrameSyncManager', 'frameUpdate',this._currentFrame)
         if (!this._isRunning || !this._isSynchronized) {
             return;
         }
@@ -136,13 +137,14 @@ export class FrameSyncManager extends Component {
         if (consecutiveFrames > this.jitterBufferFrames + 2) { 
             // 缓冲帧过多，我们落后于服务器，快进
             framesToRun = 2;
+            Logger.debug('FrameSyncManager', '缓冲高 ('+consecutiveFrames+'), 执行2帧')
             // console.log(`[FrameSync] 缓冲高 (${consecutiveFrames}), 执行2帧`);
         } else if (consecutiveFrames >= 1) { 
             // 缓冲正常，正常播放
             framesToRun = 1;
         } else {
             // 缓冲已空，等待服务器数据
-            // console.warn(`[FrameSync] 缓冲空, 等待帧 ${this._currentFrame}...`);
+            Logger.debug('FrameSyncManager', '缓冲空, 等待帧 '+this._currentFrame+'...')
             return;
         }
 
@@ -302,5 +304,8 @@ export class FrameSyncManager extends Component {
             this.unschedule(this.frameUpdate);
             this.scheduleFrameUpdate();
         }
+    }
+    public getFrameRate(): number {
+        return this.frameRate;
     }
 }

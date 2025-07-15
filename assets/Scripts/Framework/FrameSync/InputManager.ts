@@ -1,7 +1,6 @@
 import { _decorator, Component, Node, director, input, Input, Vec2, Vec3 } from 'cc';
 import { FrameSyncManager, PlayerInput, InputType } from './FrameSyncManager';
 import { NetworkManager } from '../Network/NetworkManager';
-import { MoveController } from '../../Game/MoveController';
 const { ccclass, property } = _decorator;
 
 /**
@@ -9,7 +8,6 @@ const { ccclass, property } = _decorator;
  */
 export interface MoveInputData {
     direction: Vec2;
-    speed: number;
 }
 
 /**
@@ -22,11 +20,8 @@ export class InputManager extends Component {
     private _frameSyncManager: FrameSyncManager = null;
     private _networkManager: NetworkManager = null;
     private _currentInput: Vec2 = new Vec2(0, 0);
-    private _lastInputTime: number = 0;
-    private _inputThreshold: number = 16; // 输入间隔阈值（毫秒）- 改为16ms约等于60FPS
-    private _moveSpeed: number = 200; // 移动速度
-    private _moveController: MoveController = null;
-    private _currentSpeed: number = 0; // 来自控制器的速度
+    private _moveSpeed: number = 200; // 移动速度(已不再使用，保留用于兼容)
+    // 删除_currentSpeed，不再需要
     private _isControllerActive: boolean = false;
 
     public static get instance(): InputManager {
@@ -52,28 +47,14 @@ export class InputManager extends Component {
         this._networkManager = NetworkManager.instance;
         
         // 开始输入检测循环
-        this.schedule(this.checkInput, 1/60); // 60FPS检测
+        this.schedule(this.checkInput, 1/this._frameSyncManager.getFrameRate()); // 30FPS检测
     }
 
     onDestroy() {
         this.unschedule(this.checkInput);
     }
 
-    /**
-     * 注册移动控制器
-     */
-    public registerMoveController(controller: MoveController): void {
-        this._moveController = controller;
-        this.reset();
-    }
 
-    /**
-     * 注销移动控制器
-     */
-    public unregisterMoveController(): void {
-        this._moveController = null;
-        this.reset();
-    }
     
     public startController(): void {
         this._isControllerActive = true;
@@ -86,40 +67,40 @@ export class InputManager extends Component {
             
             // 关键：必须在停止时重置共享的输入状态
             this._currentInput.set(0, 0);
-            this._currentSpeed = 0;
+            // 删除速度相关的代码
         }
     }
 
     public updateControllerState(direction: Vec3, speedRatio: number): void {
         if (!this._isControllerActive) return;
-        this._currentInput.set(direction.x, direction.y);
-        this._currentSpeed = this._moveSpeed * speedRatio;
+        // 将速度信息编码到方向向量的长度中
+        // 这样方向向量的长度就代表了速度的比例
+        this._currentInput.set(direction.x * speedRatio, direction.y * speedRatio);
     }
 
     /**
      * 检查输入变化
      */
     private checkInput(): void {
-        const now = Date.now();
-        if (now - this._lastInputTime < this._inputThreshold) {
-            return;
-        }
-
         // 只处理摇杆输入
         if (this._isControllerActive) {
-            this.sendMoveInput(this._currentInput, this._currentSpeed);
-        }
+            this.sendMoveInput(this._currentInput);
+            /*if(this._currentInput.y>0) {
+                this.sendMoveInput(new Vec2(0, 100));
+            }else{
+                this.sendMoveInput(new Vec2(0, -100));
+            }*/
 
-        this._lastInputTime = now;
+        }
     }
 
     /**
      * 发送移动输入
      */
-    private sendMoveInput(direction: Vec2, speed?: number): void {
+    private sendMoveInput(direction: Vec2): void {
         const inputData: MoveInputData = {
-            direction: direction,
-            speed: speed ?? this._moveSpeed
+            direction: direction
+            // 删除speed字段，速度应该通过direction的长度计算
         };
         
         const playerInput: PlayerInput = {
@@ -168,19 +149,10 @@ export class InputManager extends Component {
     }
 
     /**
-     * 设置输入阈值
-     */
-    public setInputThreshold(threshold: number): void {
-        this._inputThreshold = threshold;
-    }
-
-    /**
      * 重置输入状态
      */
     public reset(): void {
         this._currentInput.set(0, 0);
-        this._lastInputTime = 0;
-        this._currentSpeed = 0;
         this._isControllerActive = false;
     }
 }

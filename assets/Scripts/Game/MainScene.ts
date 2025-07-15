@@ -154,6 +154,8 @@ export class MainScene extends Component {
         this.pauseButton.node.active = false; // 默认隐藏
     }
 
+
+
     private createStatusLabel(): void {
         if (!this.statusLabel) {
             const labelNode = new Node('StatusLabel');
@@ -245,6 +247,7 @@ export class MainScene extends Component {
         if (!this.statusLabel) return;
         
         const gameState = this._gameManager.gameState;
+        const isSinglePlayer = this._gameManager.isSinglePlayerMode;
         let statusText = '';
         
         switch (gameState) {
@@ -252,13 +255,13 @@ export class MainScene extends Component {
                 statusText = '等待玩家加入...';
                 break;
             case GameState.PLAYING:
-                statusText = '游戏进行中';
+                statusText = isSinglePlayer ? '单人模式 - 游戏进行中' : '游戏进行中';
                 break;
             case GameState.PAUSED:
-                statusText = '游戏已暂停';
+                statusText = isSinglePlayer ? '单人模式 - 游戏已暂停' : '游戏已暂停';
                 break;
             case GameState.FINISHED:
-                statusText = '游戏已结束';
+                statusText = isSinglePlayer ? '单人模式 - 游戏已结束' : '游戏已结束';
                 break;
         }
         
@@ -316,6 +319,8 @@ export class MainScene extends Component {
             this._networkManager.findAndJoinRoom();
         }
     }
+
+
 
     private onStartButtonClick(): void {
         console.log('房主点击了开始按钮');

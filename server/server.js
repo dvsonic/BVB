@@ -14,6 +14,8 @@ class FrameSyncServer {
         this.frameRate = 30;
         this.frameInterval = 1000 / this.frameRate;
         this.gameLoops = new Map();
+        this.playerScores = new Map(); // 玩家积分数据
+        this.processedScoreEvents = new Set(); // 已处理的积分事件ID（去重用）
     }
 
     start() {
@@ -59,6 +61,21 @@ class FrameSyncServer {
         return 'client_' + Date.now().toString(36) + Math.random().toString(36).substr(2);
     }
 
+    /**
+     * 生成确定性随机种子
+     */
+    generateRandomSeed(roomId) {
+        // 使用房间ID和时间戳生成确定性种子
+        let hash = 0;
+        const str = roomId + Date.now().toString();
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // 转换为32位整数
+        }
+        return Math.abs(hash);
+    }
+
     handleMessage(clientId, data) {
         try {
             const message = JSON.parse(data);
@@ -83,6 +100,9 @@ class FrameSyncServer {
                     break;
                 case 'gameStart':
                     this.handleGameStart(clientId, message.data);
+                    break;
+                case 'playerScore':
+                    this.handlePlayerScore(clientId, message.data);
                     break;
             }
         } catch (error) {
@@ -273,12 +293,19 @@ class FrameSyncServer {
         room.gameState = 'playing';
         room.currentFrame = 0;
         
-        // 通知所有玩家游戏开始，包含当前帧信息
+        // 生成确定性随机种子（基于房间ID和时间戳）
+        const randomSeed = this.generateRandomSeed(roomId);
+        
+        // 清理积分事件历史
+        this.clearScoreEventsForRoom(roomId);
+        
+        // 通知所有玩家游戏开始，包含当前帧信息和随机种子
         this.broadcastToRoom(roomId, {
             type: 'gameStart',
             data: {
                 timestamp: Date.now(),
-                currentFrame: room.currentFrame
+                currentFrame: room.currentFrame,
+                randomSeed: randomSeed
             }
         });
         
@@ -287,7 +314,24 @@ class FrameSyncServer {
             this.startGameLoop(roomId);
         }, 100); // 延迟100毫秒 (原为1000)
         
-        console.log(`房间 ${roomId} 游戏开始`);
+        console.log(`房间 ${roomId} 游戏开始, 随机种子: ${randomSeed}`);
+    }
+
+    clearScoreEventsForRoom(roomId) {
+        // 清理与该房间相关的积分事件
+        // 这里简化处理，直接清理所有积分事件
+        // 在实际应用中可以根据roomId进行更精确的清理
+        this.processedScoreEvents.clear();
+        
+        // 重置房间内所有玩家的积分
+        const room = this.rooms.get(roomId);
+        if (room) {
+            room.players.forEach(player => {
+                this.playerScores.set(player.playerId, 0);
+            });
+        }
+        
+        console.log(`房间 ${roomId} 的积分事件历史已清理`);
     }
 
     startGameLoop(roomId) {
@@ -387,6 +431,74 @@ class FrameSyncServer {
                 this.sendToClient(player.clientId, message);
             }
         });
+    }
+
+    handlePlayerScore(clientId, data) {
+        const client = this.clients.get(clientId);
+        
+        if (!client || !client.roomId) {
+            return;
+        }
+
+        const { eventId, frameId, killerPlayerId, victimPlayerId, score } = data;
+        
+        // 检查是否已经处理过这个事件
+        if (this.processedScoreEvents.has(eventId)) {
+            console.log(`重复的积分事件被忽略: ${eventId}`);
+            return;
+        }
+        
+        // 记录已处理的事件ID
+        this.processedScoreEvents.add(eventId);
+        
+        // 定期清理旧的事件ID（保留最近1000个）
+        if (this.processedScoreEvents.size > 1000) {
+            const eventsArray = Array.from(this.processedScoreEvents);
+            const toKeep = eventsArray.slice(-500); // 保留最新的500个
+            this.processedScoreEvents = new Set(toKeep);
+        }
+        
+        // 更新积分
+        const currentScore = this.playerScores.get(killerPlayerId) || 0;
+        this.playerScores.set(killerPlayerId, currentScore + score);
+        
+        // 广播积分更新给房间内所有玩家
+        this.broadcastToRoom(client.roomId, {
+            type: 'scoreUpdate',
+            data: {
+                eventId,
+                frameId,
+                killerPlayerId,
+                victimPlayerId,
+                score,
+                totalScore: currentScore + score,
+                timestamp: Date.now()
+            }
+        });
+        
+        console.log(`玩家 ${killerPlayerId} 获得积分 ${score}，总积分: ${currentScore + score} (事件ID: ${eventId})`);
+    }
+
+    getPlayerScore(playerId) {
+        return this.playerScores.get(playerId) || 0;
+    }
+
+    getRoomScores(roomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) {
+            return {};
+        }
+        
+        const scores = {};
+        room.players.forEach(player => {
+            scores[player.playerId] = this.getPlayerScore(player.playerId);
+        });
+        
+        return scores;
+    }
+
+    resetPlayerScore(playerId) {
+        this.playerScores.delete(playerId);
     }
 
     stop() {

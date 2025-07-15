@@ -2,6 +2,8 @@ import { _decorator, Component, Node, Vec2, Vec3, Color, Sprite } from 'cc';
 import { FrameData, PlayerInput, InputType } from '../Framework/FrameSync/FrameSyncManager';
 import { MoveInputData } from '../Framework/FrameSync/InputManager';
 import { FixedVec2, fromFloat, toFloat, fMul, fDiv } from '../Framework/FrameSync/FixedPoint';
+import { GameManager } from './GameManager';
+import { Logger } from '../Framework/Logger';
 
 const { ccclass, property } = _decorator;
 
@@ -19,6 +21,12 @@ export class Ball extends Component {
     @property
     public radius: number = 25;
     
+    @property
+    public isAlive: boolean = true; // 球是否存活
+    
+    @property
+    public maxSpeed: number = 200; // 最大移动速度
+    
     private _radius_fp: number = 0;
     
     // --- 使用定点数进行物理计算 ---
@@ -27,6 +35,7 @@ export class Ball extends Component {
 
     // --- 用于渲染插值 ---
     private _previousPosition: FixedVec2 = new FixedVec2();
+    private _renderPosition: FixedVec2 = new FixedVec2(); // 当前渲染位置
     private _timeSinceLastLogicUpdate: number = 0;
     private _logicFrameInterval: number = 1 / 30; // 默认值, 会被动态更新
 
@@ -47,6 +56,7 @@ export class Ball extends Component {
         const initialPos = new FixedVec2(fromFloat(this.node.position.x), fromFloat(this.node.position.y));
         this._position.set(initialPos.x, initialPos.y);
         this._previousPosition.set(initialPos.x, initialPos.y);
+        this._renderPosition.set(initialPos.x, initialPos.y);
     }
 
     /**
@@ -56,9 +66,10 @@ export class Ball extends Component {
     update(deltaTime: number): void {
         this._timeSinceLastLogicUpdate += deltaTime;
         
+        // 计算插值因子，确保不超过1
         const alpha = Math.min(this._timeSinceLastLogicUpdate / this._logicFrameInterval, 1.0);
 
-        // --- 插值计算 ---
+        // 使用传统插值：从上一帧位置向当前帧位置插值
         const prevX = toFloat(this._previousPosition.x);
         const prevY = toFloat(this._previousPosition.y);
         const currentX = toFloat(this._position.x);
@@ -67,6 +78,14 @@ export class Ball extends Component {
         const renderX = prevX + (currentX - prevX) * alpha;
         const renderY = prevY + (currentY - prevY) * alpha;
         
+        const step = renderY - this.node.position.y;
+        
+        // 只在移动幅度较大时输出调试信息，避免性能影响
+        if (Math.abs(step) > 0.0001) { // 提高阈值，减少日志输出
+            Logger.debug('Ball', `step:${step.toFixed(3)} deltaTime:${deltaTime.toFixed(6)}`);
+        }
+        
+        // 更新节点位置
         this.node.setPosition(renderX, renderY);
     }
 
@@ -75,7 +94,12 @@ export class Ball extends Component {
      */
     public processFrameData(frameData: FrameData, fixedDeltaTime: number): void {
         this._previousPosition.set(this._position.x, this._position.y);
-        this._logicFrameInterval = fixedDeltaTime;
+        
+        // 更新逻辑帧间隔（只在需要时更新）
+        if (Math.abs(this._logicFrameInterval - fixedDeltaTime) > 0.001) {
+            this._logicFrameInterval = fixedDeltaTime;
+        }
+        
         const fixedDeltaTime_fp = fromFloat(fixedDeltaTime);
 
         const playerInput = frameData.inputs.find(input => input.playerId === this.playerId);
@@ -84,8 +108,9 @@ export class Ball extends Component {
             this.processPlayerInput(playerInput);
         }
         
+        // 更新物理状态
         this.updatePhysics(fixedDeltaTime_fp);
-
+        // 重置插值计时器
         this._timeSinceLastLogicUpdate = 0;
     }
 
@@ -112,15 +137,27 @@ export class Ball extends Component {
             return;
         }
 
-        if (inputData.speed <= 0) {
+        // 计算方向向量的长度
+        const directionLength = Math.sqrt(inputData.direction.x * inputData.direction.x + 
+                                        inputData.direction.y * inputData.direction.y);
+        
+        if (directionLength <= 0) {
             this.handleStopInput();
             return;
         }
 
-        // 输入的 direction 已经归一化，speed是目标速度
-        // 直接根据输入设置速度
-        const speed_fp = fromFloat(inputData.speed);
-        this._velocity.set(fromFloat(inputData.direction.x), fromFloat(inputData.direction.y));
+        // 根据方向向量的长度计算速度
+        const speed = this.maxSpeed * Math.min(directionLength, 1.0); // 限制在最大速度以内
+        
+        // 归一化方向向量
+        const normalizedDirection = new Vec2(
+            inputData.direction.x / directionLength,
+            inputData.direction.y / directionLength
+        );
+        
+        // 设置速度
+        const speed_fp = fromFloat(speed);
+        this._velocity.set(fromFloat(normalizedDirection.x), fromFloat(normalizedDirection.y));
         this._velocity.multiplyScalar(speed_fp);
     }
 
@@ -148,10 +185,10 @@ export class Ball extends Component {
      */
     private checkBoundaries(): void {
         const screenBounds = {
-            left: fromFloat(-400),
-            right: fromFloat(400),
-            top: fromFloat(300),
-            bottom: fromFloat(-300)
+            left: fromFloat(-GameManager.instance.gameAreaWidth / 2),
+            right: fromFloat(GameManager.instance.gameAreaWidth / 2),
+            top: fromFloat(GameManager.instance.gameAreaHeight / 2),
+            bottom: fromFloat(-GameManager.instance.gameAreaHeight / 2)
         };
         const bounce_fp = fromFloat(-0.8);
         
@@ -176,7 +213,7 @@ export class Ball extends Component {
      * 更新节点位置 (仅用于初始设置或强制同步)
      */
     private updateNodePosition(): void {
-        this.node.setPosition(toFloat(this._position.x), toFloat(this._position.y), 0);
+        this.node.setPosition(toFloat(this._renderPosition.x), toFloat(this._renderPosition.y), 0);
     }
 
     /**
@@ -185,6 +222,7 @@ export class Ball extends Component {
     public setPosition(position: FixedVec2): void {
         this._position.set(position.x, position.y);
         this._previousPosition.set(position.x, position.y);
+        this._renderPosition.set(position.x, position.y);
         this.updateNodePosition();
     }
 
@@ -221,11 +259,140 @@ export class Ball extends Component {
     }
 
     /**
+     * 设置小球半径
+     */
+    public setRadius(radius: number): void {
+        this.radius = radius;
+        this._radius_fp = fromFloat(radius);
+        this.updateVisualScale();
+    }
+
+    /**
      * 重置小球状态
      */
     public reset(): void {
         this._position.set(0, 0);
         this._velocity.set(0, 0);
+        this._renderPosition.set(0, 0);
         this.updateNodePosition();
+    }
+
+    /**
+     * 检测与另一个球的碰撞
+     */
+    public checkCollisionWith(otherBall: Ball): boolean {
+        if (!this.isAlive || !otherBall.isAlive) {
+            return false;
+        }
+        
+        // 计算两球中心距离（使用定点数计算）
+        const dx = this._position.x - otherBall._position.x;
+        const dy = this._position.y - otherBall._position.y;
+        
+        // 使用定点数乘法计算距离的平方
+        const dxSquared = fMul(dx, dx);
+        const dySquared = fMul(dy, dy);
+        const distanceSquared = dxSquared + dySquared;
+        
+        // 计算最小距离的平方（避免开方运算）
+        const minDistance = this._radius_fp + otherBall._radius_fp;
+        const minDistanceSquared = fMul(minDistance, minDistance);
+        
+        // 比较距离平方和最小距离平方
+        const isColliding = distanceSquared < minDistanceSquared;
+        
+        return isColliding;
+    }
+
+    /**
+     * 处理与另一个球的碰撞
+     */
+    public handleCollisionWith(otherBall: Ball): void {
+        if (!this.checkCollisionWith(otherBall)) {
+            return;
+        }
+        
+        // 半径大的球吃掉半径小的球
+        if (this.radius > otherBall.radius) {
+            // 当前球更大，吃掉对方
+            this.consumeBall(otherBall);
+        } else if (otherBall.radius > this.radius) {
+            // 对方球更大，被对方吃掉
+            otherBall.consumeBall(this);
+        }
+        // 半径相等时不做任何处理，球可以穿过
+    }
+
+    /**
+     * 吃掉另一个球
+     */
+    private consumeBall(targetBall: Ball): void {
+        if (!targetBall.isAlive) {
+            return;
+        }
+        
+        // 计算积分（基于被吃球的半径）
+        const score = Math.floor(targetBall.radius * 2); // 简单的积分计算
+        
+        // 增加半径（根据面积增加）
+        const myArea = Math.PI * this.radius * this.radius;
+        const targetArea = Math.PI * targetBall.radius * targetBall.radius;
+        const newArea = myArea + targetArea * 0.8; // 吸收80%的面积
+        
+        // 计算新半径
+        this.radius = Math.sqrt(newArea / Math.PI);
+        this._radius_fp = fromFloat(this.radius);
+        
+        // 更新视觉效果
+        this.updateVisualScale();
+        
+        // 通知GameManager处理积分（包含当前帧ID）
+        const currentFrame = GameManager.instance.getCurrentFrame();
+        GameManager.instance.onPlayerScore(
+            this.playerId, 
+            targetBall.playerId, 
+            score, 
+            currentFrame,
+            this.radius,
+            targetBall.radius
+        );
+        
+        // 标记目标球为死亡
+        targetBall.die();
+        
+        Logger.log('Ball', `球 ${this.playerId} 吃掉了球 ${targetBall.playerId}，获得积分: ${score}，新半径: ${this.radius.toFixed(2)}`);
+    }
+
+    /**
+     * 更新视觉缩放
+     */
+    private updateVisualScale(): void {
+        const scale = this.radius * 2 / 100;
+        this.node.setScale(scale, scale);
+    }
+
+    /**
+     * 球死亡处理
+     */
+    public die(): void {
+        this.isAlive = false;
+        this.node.active = false;
+        
+        // 在单人模式下提供额外信息
+        if (GameManager.instance.isSinglePlayerMode) {
+            const score = GameManager.instance.getPlayerScore(this.playerId);
+            Logger.log('Ball', `单人模式：球 ${this.playerId} 被消除，最终积分: ${score}`);
+        } else {
+            Logger.log('Ball', `球 ${this.playerId} 被消除`);
+        }
+    }
+
+    /**
+     * 复活球（用于重新开始游戏）
+     */
+    public revive(radius: number = 25): void {
+        this.isAlive = true;
+        this.node.active = true;
+        this.setRadius(radius);
     }
 }

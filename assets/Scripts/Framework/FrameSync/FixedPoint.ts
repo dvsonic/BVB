@@ -133,3 +133,66 @@ export class FixedVec2 {
         return this;
     }
 } 
+
+/**
+ * 确定性随机数生成器 (基于线性同余发生器)
+ * 保证所有客户端使用相同种子时产生相同的随机数序列
+ */
+export class DeterministicRandom {
+    private seed: number;
+    private readonly a: number = 1664525;
+    private readonly c: number = 1013904223;
+    private readonly m: number = 0x100000000; // 2^32
+    
+    constructor(seed: number = 1) {
+        this.seed = seed;
+    }
+    
+    /**
+     * 设置随机种子
+     */
+    public setSeed(seed: number): void {
+        this.seed = seed;
+    }
+    
+    /**
+     * 获取当前种子
+     */
+    public getSeed(): number {
+        return this.seed;
+    }
+    
+    /**
+     * 生成下一个随机数 [0, 1)
+     */
+    public next(): number {
+        this.seed = (this.a * this.seed + this.c) % this.m;
+        return this.seed / this.m;
+    }
+    
+    /**
+     * 生成指定范围的随机数 [min, max)
+     */
+    public nextRange(min: number, max: number): number {
+        return min + this.next() * (max - min);
+    }
+    
+    /**
+     * 生成指定范围的随机整数 [min, max]
+     */
+    public nextInt(min: number, max: number): number {
+        return Math.floor(this.nextRange(min, max + 1));
+    }
+    
+    /**
+     * 生成随机布尔值
+     */
+    public nextBoolean(): boolean {
+        return this.next() < 0.5;
+    }
+}
+
+/**
+ * 全局确定性随机数生成器实例
+ */
+export const globalRandom = new DeterministicRandom(); 

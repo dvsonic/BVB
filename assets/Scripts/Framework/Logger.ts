@@ -46,4 +46,9 @@ export class Logger {
         const timestamp = this.getTimestamp();
         console.error(`[${timestamp}] [${tag}]`, ...args);
     }
+
+    public static debug(tag: string, ...args: any[]): void {
+        //const timestamp = this.getTimestamp();
+        //console.log(`[${timestamp}] [${tag}]`, ...args);
+    }
 } 

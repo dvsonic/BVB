@@ -13,7 +13,9 @@ export enum MessageType {
     ROOM_INFO = 'roomInfo',
     PLAYER_READY = 'playerReady',
     GAME_START = 'gameStart',
-    FIND_OR_CREATE_ROOM = 'findOrCreateRoom' // 新增消息类型
+    FIND_OR_CREATE_ROOM = 'findOrCreateRoom', // 新增消息类型
+    PLAYER_SCORE = 'playerScore', // 玩家积分事件
+    SCORE_UPDATE = 'scoreUpdate' // 积分更新通知
 }
 
 /**
