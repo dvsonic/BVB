@@ -346,16 +346,8 @@ export class Ball extends Component {
         // 更新视觉效果
         this.updateVisualScale();
         
-        // 通知GameManager处理积分（包含当前帧ID）
-        const currentFrame = GameManager.instance.getCurrentFrame();
-        GameManager.instance.onPlayerScore(
-            this.playerId, 
-            targetBall.playerId, 
-            score, 
-            currentFrame,
-            this.radius,
-            targetBall.radius
-        );
+        // 直接调用GameManager的本地计分方法
+        GameManager.instance.addScore(this.playerId, score);
         
         // 标记目标球为死亡
         targetBall.die();

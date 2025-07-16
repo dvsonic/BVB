@@ -89,7 +89,6 @@ export class GameManager {
         // 注册网络消息处理器
         this._networkManager.registerMessageHandler(MessageType.ROOM_INFO, this._boundOnRoomInfo);
         this._networkManager.registerMessageHandler(MessageType.GAME_START, this._boundOnGameStart);
-        this._networkManager.registerMessageHandler(MessageType.SCORE_UPDATE, this.onScoreUpdate.bind(this));
         
         // 注册帧同步回调
         this._frameSyncManager.registerFrameCallback(this._boundOnFrameUpdate);
@@ -124,6 +123,9 @@ export class GameManager {
         this._roomId = '';
         this._ownerId = ''; // 重置房主ID
         this._gameStartTime = 0;
+        
+        // 重置分数
+        this.resetScores();
         
         // 重置随机数生成器
         this._randomGenerator.setSeed(1);
@@ -268,32 +270,24 @@ export class GameManager {
     }
 
     /**
-     * 处理游戏开始
+     * 处理游戏开始消息
      */
     private onGameStart(message: any): void {
-        if (this._gameState === GameState.PLAYING) {
-            console.warn('游戏已开始，忽略重复的开始指令。');
-            return;
-        }
+        const gameStartData = message.data;
+        Logger.debug('GameManager', 'onGameStart received', gameStartData);
+        
         this._gameState = GameState.PLAYING;
-        this._gameStartTime = Date.now();
+        this._gameStartTime = gameStartData.timestamp;
         
-        // 记录玩家数量
-        Logger.log('GameManager', `游戏模式: ${this._players.size === 1 ? '单人模式' : '多人模式'}, 玩家数量: ${this._players.size}`);
+        // 使用服务器提供的种子初始化随机数生成器
+        this._randomGenerator.setSeed(gameStartData.randomSeed);
         
-        // 设置确定性随机种子（基于房间ID和时间戳）
-        const randomSeed = message.data.randomSeed || this.generateRandomSeed();
-        this._randomGenerator.setSeed(randomSeed);
-        Logger.log('GameManager', `设置随机种子: ${randomSeed}`);
-        
-        // 重置积分
+        // 重置分数
         this.resetScores();
-        
-        // 创建所有玩家的小球
+
+        // 为所有玩家创建小球
         this.createPlayerBalls();
         
-        // 开始帧同步
-        this._frameSyncManager.startFrameSync();
     }
 
     /**
@@ -661,70 +655,12 @@ export class GameManager {
     }
 
     /**
-     * 处理玩家获得积分
+     * 为玩家增加积分（本地确定性）
      */
-    public onPlayerScore(
-        killerPlayerId: string, 
-        victimPlayerId: string, 
-        score: number, 
-        frameId: number,
-        killerRadius: number,
-        victimRadius: number
-    ): void {
-        // 更新本地积分
-        const currentScore = this._playerScores.get(killerPlayerId) || 0;
-        this._playerScores.set(killerPlayerId, currentScore + score);
-        
-        // 发送积分事件到服务器（包含去重信息）
-        this.sendScoreEvent(killerPlayerId, victimPlayerId, score, frameId, killerRadius, victimRadius);
-        
-        Logger.log('GameManager', `玩家 ${killerPlayerId} 获得积分: ${score}，总积分: ${currentScore + score}`);
-    }
-
-    /**
-     * 发送积分事件到服务器
-     */
-    private sendScoreEvent(
-        killerPlayerId: string, 
-        victimPlayerId: string, 
-        score: number, 
-        frameId: number,
-        killerRadius: number,
-        victimRadius: number
-    ): void {
-        if (this._networkManager) {
-            // 创建事件唯一标识
-            const eventId = `${frameId}_${killerPlayerId}_${victimPlayerId}_${score}`;
-            
-            this._networkManager.sendMessage({
-                type: MessageType.PLAYER_SCORE,
-                data: {
-                    eventId,
-                    frameId,
-                    killerPlayerId,
-                    victimPlayerId,
-                    score,
-                    killerRadius,
-                    victimRadius,
-                    timestamp: Date.now()
-                }
-            });
-        }
-    }
-
-    /**
-     * 处理服务器积分更新
-     */
-    private onScoreUpdate(message: any): void {
-        const { eventId, frameId, killerPlayerId, victimPlayerId, score, totalScore } = message.data;
-        
-        // 更新本地积分缓存
-        this._playerScores.set(killerPlayerId, totalScore);
-        
-        Logger.log('GameManager', `收到积分更新: ${killerPlayerId} 获得 ${score} 分，总积分: ${totalScore} (事件ID: ${eventId}, 帧: ${frameId})`);
-        
-        // 可以在这里触发UI更新等
-        // 例如：this.updateScoreUI(killerPlayerId, totalScore);
+    public addScore(playerId: string, score: number): void {
+        const currentScore = this.getPlayerScore(playerId);
+        this._playerScores.set(playerId, currentScore + score);
+        Logger.log('GameManager', `玩家 ${playerId} 获得积分: ${score}，总积分: ${currentScore + score}`);
     }
 
     /**
@@ -749,7 +685,7 @@ export class GameManager {
         this._players.forEach(player => {
             this._playerScores.set(player.playerId, 0);
         });
-        Logger.log('GameManager', '所有玩家积分已重置');
+        Logger.debug('GameManager', '玩家分数已重置');
     }
 
     /**

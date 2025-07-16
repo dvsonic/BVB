@@ -57,6 +57,7 @@ export class FrameSyncManager extends Component {
     private _lastFrameTime: number = 0;
     private _frameCallbacks: Function[] = [];
     private _isSynchronized: boolean = false; // 是否已同步
+    private _frameTimer: any = null; // 定时器
 
     public static get instance(): FrameSyncManager {
         if (!FrameSyncManager._instance) {
@@ -74,6 +75,11 @@ export class FrameSyncManager extends Component {
         }
         FrameSyncManager._instance = this;
         this.init();
+    }
+
+    onDestroy() {
+        // 组件销毁时确保清理定时器
+        this.stopFrameSync();
     }
 
     private init(): void {
@@ -109,9 +115,15 @@ export class FrameSyncManager extends Component {
      * 停止帧同步
      */
     public stopFrameSync(): void {
+        if (!this._isRunning) {
+            return;
+        }
         this._isRunning = false;
         this._isSynchronized = false;
-        this.unschedule(this.frameUpdate);
+        if (this._frameTimer) {
+            clearInterval(this._frameTimer);
+            this._frameTimer = null;
+        }
         console.log('帧同步停止');
     }
 
@@ -119,32 +131,36 @@ export class FrameSyncManager extends Component {
      * 调度帧更新
      */
     private scheduleFrameUpdate(): void {
-        this.schedule(this.frameUpdate, this._frameInterval / 1000);
+        if (this._frameTimer) {
+            clearInterval(this._frameTimer);
+        }
+        // 使用 setInterval 替代 schedule
+        this._frameTimer = setInterval(this.frameUpdate.bind(this), this._frameInterval);
     }
 
     /**
      * 帧更新
      */
     private frameUpdate(): void {
-        Logger.debug('FrameSyncManager', 'frameUpdate',this._currentFrame)
         if (!this._isRunning || !this._isSynchronized) {
             return;
         }
         // 动态调整播放速度以匹配服务器帧率
         const consecutiveFrames = this.getConsecutiveFramesCount();
         let framesToRun = 0;
-
+        Logger.debug('FrameSyncManager', 'frameUpdate',this._currentFrame,"leftFrameCount",consecutiveFrames)
+        // 核心逻辑修改：引入真正的抖动缓冲
+        // 只有当缓冲区的帧数大于我们设定的安全缓冲时，才进行播放
         if (consecutiveFrames > this.jitterBufferFrames + 2) { 
             // 缓冲帧过多，我们落后于服务器，快进
             framesToRun = 2;
-            Logger.debug('FrameSyncManager', '缓冲高 ('+consecutiveFrames+'), 执行2帧')
-            // console.log(`[FrameSync] 缓冲高 (${consecutiveFrames}), 执行2帧`);
-        } else if (consecutiveFrames >= 1) { 
-            // 缓冲正常，正常播放
+            Logger.debug('FrameSyncManager', `缓冲高 (${consecutiveFrames}), 执行2帧`)
+        } else if (consecutiveFrames > this.jitterBufferFrames) { 
+            // 缓冲正常（高于安全线），正常播放
             framesToRun = 1;
         } else {
-            // 缓冲已空，等待服务器数据
-            Logger.debug('FrameSyncManager', '缓冲空, 等待帧 '+this._currentFrame+'...')
+            // 缓冲已低于或等于安全线，等待服务器数据，以重建缓冲
+            Logger.debug('FrameSyncManager', `缓冲低 (${consecutiveFrames}), 等待帧 ${this._currentFrame}...`)
             return;
         }
 
@@ -186,14 +202,26 @@ export class FrameSyncManager extends Component {
      */
     private onFrameData(message: NetworkMessage): void {
         const frameData: FrameData = message.data;
-        
-        // 只在首次接收到帧数据时同步客户端帧计数器
-        if (!this._isSynchronized) {
-            this._currentFrame = frameData.frameId;
-            this._isSynchronized = true;
-            console.log(`初始帧同步: 设置客户端当前帧为 ${this._currentFrame}`);
-        }
         this._frameBuffer.set(frameData.frameId, frameData);
+
+        // 如果尚未同步，则检查是否已达到启动播放所需的缓冲帧数
+        if (!this._isSynchronized) {
+            // 检查我们是否已经缓冲了足够的连续帧
+            const minFrameId = Math.min(...this._frameBuffer.keys());
+            let consecutiveFrames = 0;
+            let frame = minFrameId;
+            while (this._frameBuffer.has(frame)) {
+                consecutiveFrames++;
+                frame++;
+            }
+
+            // 如果连续帧数达到或超过了设定的缓冲帧数，则开始同步
+            if (consecutiveFrames >= this.bufferFrames) {
+                this._currentFrame = minFrameId;
+                this._isSynchronized = true;
+                console.log(`缓冲完成: 客户端从帧 ${this._currentFrame} 开始同步`);
+            }
+        }
         
         // 清理旧的帧数据
         this.cleanupOldFrames();
@@ -202,9 +230,7 @@ export class FrameSyncManager extends Component {
     /**
      * 处理游戏开始
      */
-    private onGameStart(message: NetworkMessage): void {
-        console.log('游戏开始');
-        
+    private onGameStart(message: NetworkMessage): void {       
         // 重置同步状态，等待服务器帧数据同步
         this._isSynchronized = false;
         
@@ -301,7 +327,6 @@ export class FrameSyncManager extends Component {
         this._frameInterval = 1000 / this.frameRate;
         
         if (this._isRunning) {
-            this.unschedule(this.frameUpdate);
             this.scheduleFrameUpdate();
         }
     }
